@@ -230,7 +230,7 @@ io.on("connection", (socket) => {
 
   // Host login event
   socket.on("host:login", ({ username, password }) => {
-    if (username === "admin" && password === "admin123") {
+    if (username === "admin" && password === "myNewSecret") {
       socket.isHost = true;
       socket.emit("host:login:success");
       console.log("Host authenticated");
