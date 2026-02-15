@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+const path = require("path"); // already present
 
 const app = express();
 const server = http.createServer(app);
@@ -9,11 +10,17 @@ const io = new Server(server);
 // Serve static files
 app.use(express.static("public"));
 
+// 👇 FIXED: Catch‑all middleware (no path pattern, so no parsing error)
+app.use((req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 // ---------- Game State ----------
 let gameState = {
   tickets: [],
   calledNumbers: [],
-  winners: [],
+  fullHousieWinners: [], // Array of winner objects (max 5)
+  winners: [], // For backward compatibility
   status: "NO_ACTIVE_GAME",
   drawSequence: [],
   drawIndex: 0,
@@ -22,13 +29,18 @@ let gameState = {
   gameEndedAt: null,
   countdownEndTime: null,
   lastCallTime: null,
+  maxWinners: 5,
+  gameEndReason: null,
 };
+
+// Timer reference
+let nextCallTimeout = null;
 
 function broadcastState() {
   io.emit("gameState", gameState);
 }
 
-// ---------- Tambola Generator (unchanged) ----------
+// ---------- Tambola Generator ----------
 const TambolaGenerator = {
   generateTicket() {
     let colCounts = new Array(9).fill(1);
@@ -112,6 +124,7 @@ const TambolaGenerator = {
     }
     return ticket;
   },
+
   generateTickets(count) {
     let tickets = [];
     for (let i = 1; i <= count; i++)
@@ -120,17 +133,137 @@ const TambolaGenerator = {
         numbers: this.generateTicket(),
         isBooked: false,
         bookedBy: null,
-        isWinner: false,
-        winnerOrder: null,
+        isFullHousieWinner: false,
+        fullHousieOrder: null,
+        winTime: null,
+        winningPattern: null,
       });
     return tickets;
   },
 };
 
+// ---------- Winner Detection Functions ----------
+
+function checkForFullHousieWinners() {
+  // Stop if we already have 5 winners
+  if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+    return;
+  }
+
+  // Get all booked tickets that haven't won yet
+  const activeTickets = gameState.tickets.filter(
+    (t) => t.isBooked && !t.isFullHousieWinner,
+  );
+
+  // Check each ticket
+  for (const ticket of activeTickets) {
+    // Get all non-zero numbers on ticket
+    const ticketNumbers = ticket.numbers.flat().filter((n) => n !== 0);
+
+    // Check if ALL numbers have been called
+    const allNumbersMarked = ticketNumbers.every((num) =>
+      gameState.calledNumbers.includes(num),
+    );
+
+    if (allNumbersMarked) {
+      // This ticket wins FULL HOUSIE!
+      declareWinner(ticket);
+
+      // Stop if we now have 5 winners
+      if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+        break;
+      }
+    }
+  }
+
+  // If we reached 5 winners, end the game
+  if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+    endGameDueToMaxWinners();
+  }
+}
+
+function declareWinner(ticket) {
+  // Calculate winner order
+  const winnerOrder = gameState.fullHousieWinners.length + 1;
+
+  // Update ticket object
+  ticket.isFullHousieWinner = true;
+  ticket.fullHousieOrder = winnerOrder;
+  ticket.winTime = new Date().toISOString();
+  ticket.winningPattern = "FULL HOUSIE";
+
+  // Create winner object
+  const winner = {
+    order: winnerOrder,
+    ticketId: ticket.id,
+    playerName: ticket.bookedBy,
+    pattern: "FULL HOUSIE",
+    winTime: new Date().toLocaleTimeString(),
+    winTimestamp: Date.now(),
+    ticketNumbers: ticket.numbers,
+    calledNumbersAtWin: [...gameState.calledNumbers],
+  };
+
+  // Add to winners array
+  gameState.fullHousieWinners.push(winner);
+
+  // Update legacy winners array
+  gameState.winners.push({
+    ticketId: ticket.id,
+    playerName: ticket.bookedBy,
+    winnerOrder: winnerOrder,
+    pattern: "FULL HOUSIE",
+    declaredAt: new Date().toLocaleTimeString(),
+  });
+
+  // Log the win
+  console.log(
+    `🏆 WINNER #${winnerOrder}: ${ticket.bookedBy} with ticket ${ticket.id}`,
+  );
+
+  // Broadcast special winner event
+  io.emit("newFullHousieWinner", {
+    winner: winner,
+    totalWinners: gameState.fullHousieWinners.length,
+    maxWinners: gameState.maxWinners,
+    gameContinues: gameState.fullHousieWinners.length < gameState.maxWinners,
+  });
+
+  // Broadcast full state update
+  broadcastState();
+}
+
+function endGameDueToMaxWinners() {
+  console.log("🏁 GAME ENDED - 5 FULL HOUSIE WINNERS REACHED");
+
+  // Update game state
+  gameState.status = "COMPLETED";
+  gameState.gameEndedAt = Date.now();
+  gameState.gameEndReason = "FULL_HOUSIE_COMPLETE";
+
+  // Clear any scheduled calls
+  if (nextCallTimeout) {
+    clearTimeout(nextCallTimeout);
+    nextCallTimeout = null;
+  }
+
+  // Send special game end event
+  io.emit("gameEndedWithWinners", {
+    winners: gameState.fullHousieWinners,
+    totalWinners: gameState.fullHousieWinners.length,
+    calledNumbers: gameState.calledNumbers.length,
+    gameEndedAt: new Date().toLocaleTimeString(),
+  });
+
+  // Broadcast final state
+  broadcastState();
+}
+
 // ---------- Game Logic ----------
-function startCountdown() {
+
+function startCountdown(durationSeconds) {
   gameState.status = "COUNTDOWN";
-  gameState.countdownEndTime = Date.now() + 20000; // 20 seconds
+  gameState.countdownEndTime = Date.now() + durationSeconds * 1000;
   gameState.gameStartedAt = null;
   gameState.drawIndex = 0;
   broadcastState();
@@ -139,7 +272,7 @@ function startCountdown() {
     if (gameState.status === "COUNTDOWN") {
       actuallyStartGame();
     }
-  }, 20000);
+  }, durationSeconds * 1000);
 }
 
 function actuallyStartGame() {
@@ -152,56 +285,57 @@ function actuallyStartGame() {
 }
 
 function scheduleNextCall() {
+  // Check if game is still running
   if (gameState.status !== "RUNNING") return;
-  if (
-    gameState.winners.length >= 5 ||
-    gameState.drawIndex >= gameState.drawSequence.length
-  ) {
-    endGame();
+
+  // Check if we already have 5 winners
+  if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+    endGameDueToMaxWinners();
+    return;
+  }
+
+  // Check if we've called all numbers
+  if (gameState.drawIndex >= gameState.drawSequence.length) {
+    endGame("SEQUENCE_COMPLETE");
     return;
   }
 
   const now = Date.now();
   const timeUntilNextCall = Math.max(0, 3000 - (now - gameState.lastCallTime));
-  setTimeout(() => {
+
+  nextCallTimeout = setTimeout(() => {
     if (gameState.status !== "RUNNING") return;
+
+    // Check again for 5 winners before calling next number
+    if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+      endGameDueToMaxWinners();
+      return;
+    }
 
     const number = gameState.drawSequence[gameState.drawIndex++];
     if (!gameState.calledNumbers.includes(number)) {
       gameState.calledNumbers.push(number);
     }
     gameState.lastCallTime = Date.now();
-    checkWinners();
+
+    // Check for winners after each call
+    checkForFullHousieWinners();
+
     broadcastState();
     scheduleNextCall();
   }, timeUntilNextCall);
 }
 
-function checkWinners() {
-  let newWinner = false;
-  gameState.tickets.forEach((t) => {
-    if (!t.isBooked || t.isWinner) return;
-    const numbers = t.numbers.flat().filter((n) => n !== 0);
-    const marked = numbers.filter((n) => gameState.calledNumbers.includes(n));
-    if (marked.length === numbers.length) {
-      t.isWinner = true;
-      t.winnerOrder = gameState.winners.length + 1;
-      gameState.winners.push({
-        ticketId: t.id,
-        playerName: t.bookedBy,
-        winnerOrder: t.winnerOrder,
-        declaredAt: new Date().toLocaleTimeString(),
-      });
-      newWinner = true;
-    }
-  });
-  if (newWinner) broadcastState();
-  if (gameState.winners.length >= 5) endGame();
-}
-
-function endGame() {
+function endGame(reason) {
   gameState.status = "COMPLETED";
   gameState.gameEndedAt = Date.now();
+  gameState.gameEndReason = reason;
+
+  if (nextCallTimeout) {
+    clearTimeout(nextCallTimeout);
+    nextCallTimeout = null;
+  }
+
   broadcastState();
 }
 
@@ -209,6 +343,7 @@ function resetGame() {
   gameState = {
     tickets: [],
     calledNumbers: [],
+    fullHousieWinners: [],
     winners: [],
     status: "NO_ACTIVE_GAME",
     drawSequence: [],
@@ -218,13 +353,22 @@ function resetGame() {
     gameEndedAt: null,
     countdownEndTime: null,
     lastCallTime: null,
+    maxWinners: 5,
+    gameEndReason: null,
   };
+
+  if (nextCallTimeout) {
+    clearTimeout(nextCallTimeout);
+    nextCallTimeout = null;
+  }
+
   broadcastState();
 }
 
 // ---------- Socket.IO with Authentication ----------
 io.on("connection", (socket) => {
   console.log("a user connected");
+
   // Send current state immediately
   socket.emit("gameState", gameState);
 
@@ -239,7 +383,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // All host-only events must check authentication
+  // Host-only events checker
   const requireHost = (callback) => {
     if (!socket.isHost) {
       socket.emit("host:error", { message: "Not authenticated" });
@@ -253,6 +397,7 @@ io.on("connection", (socket) => {
     const tickets = TambolaGenerator.generateTickets(ticketCount);
     gameState.tickets = tickets;
     gameState.calledNumbers = [];
+    gameState.fullHousieWinners = [];
     gameState.winners = [];
     gameState.drawSequence = [];
     gameState.drawIndex = 0;
@@ -262,6 +407,7 @@ io.on("connection", (socket) => {
     gameState.gameEndedAt = null;
     gameState.countdownEndTime = null;
     gameState.lastCallTime = null;
+    gameState.gameEndReason = null;
     broadcastState();
   });
 
@@ -271,13 +417,26 @@ io.on("connection", (socket) => {
     broadcastState();
   });
 
-  socket.on("host:startCountdown", () => {
+  socket.on("host:startCountdown", ({ duration }) => {
     if (!requireHost()) return;
     if (
       gameState.status === "BOOKING_OPEN" &&
       gameState.tickets.filter((t) => t.isBooked).length > 0
     ) {
-      startCountdown();
+      // Parse duration (seconds or minutes)
+      let seconds = 30; // default
+      if (typeof duration === "number") {
+        seconds = duration;
+      } else if (typeof duration === "string") {
+        if (duration.endsWith("m")) {
+          seconds = parseInt(duration) * 60;
+        } else {
+          seconds = parseInt(duration);
+        }
+      }
+      // Validate
+      seconds = Math.max(5, Math.min(300, seconds));
+      startCountdown(seconds);
     }
   });
 
@@ -288,17 +447,31 @@ io.on("connection", (socket) => {
 
   socket.on("host:bookTicket", ({ ticketId, playerName }) => {
     if (!requireHost()) return;
+
+    // Bookings allowed only during BOOKING_OPEN
+    if (gameState.status !== "BOOKING_OPEN") {
+      socket.emit("host:error", {
+        message: "Bookings closed - game in progress or ended",
+      });
+      return;
+    }
+
     const ticket = gameState.tickets.find((t) => t.id === ticketId);
-    if (ticket && !ticket.isBooked && !ticket.isWinner) {
+    if (ticket && !ticket.isBooked && !ticket.isFullHousieWinner) {
       ticket.isBooked = true;
       ticket.bookedBy = playerName;
       broadcastState();
     }
   });
 
+  // Player search - no authentication needed
+  socket.on("player:search", ({ query }) => {
+    // Just emit back the current state - search happens client-side
+    socket.emit("gameState", gameState);
+  });
+
   socket.on("disconnect", () => {
     console.log("user disconnected");
-    // No need to clear authentication – next connection is fresh
   });
 });
 
