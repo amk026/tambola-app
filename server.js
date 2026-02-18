@@ -48,95 +48,105 @@ function broadcastState() {
 
 // Tambola ticket generator (improved)
 const TambolaGenerator = {
+  // Generate a single valid Tambola ticket
   generateTicket() {
-    // Step 1: Decide how many numbers per column (1-3, total 15)
-    let colCounts = new Array(9).fill(1);
-    let remaining = 6; // need 6 more to reach 15
-    while (remaining > 0) {
-      let col = Math.floor(Math.random() * 9);
-      if (colCounts[col] < 3) {
-        colCounts[col]++;
-        remaining--;
+    const MAX_ATTEMPTS = 100;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      // Step 1: Generate random column counts (1-3 each, sum 15)
+      let colCounts = new Array(9).fill(1); // start with all 1's (sum = 9)
+      let remaining = 6; // need 6 more to reach 15
+      while (remaining > 0) {
+        let col = Math.floor(Math.random() * 9);
+        if (colCounts[col] < 3) {
+          colCounts[col]++;
+          remaining--;
+        }
       }
-    }
 
-    // Step 2: For each column, choose which rows (0,1,2) will have numbers
-    let colRows = Array(9)
-      .fill()
-      .map(() => []);
-    let rowCounts = [0, 0, 0];
+      // Step 2: Create empty ticket (3x9) and remaining counters
+      let ticket = Array(3)
+        .fill()
+        .map(() => Array(9).fill(0));
+      let rowRemaining = [5, 5, 5];
+      let colRemaining = [...colCounts];
 
-    // Process columns in random order
-    let cols = [0, 1, 2, 3, 4, 5, 6, 7, 8];
-    for (let i = cols.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [cols[i], cols[j]] = [cols[j], cols[i]];
-    }
+      // Step 3: Greedily place 1's (numbers) into cells
+      let placed = 0;
+      while (placed < 15) {
+        // Pick a random row that still needs numbers
+        let rowsWithSpace = [];
+        for (let r = 0; r < 3; r++) {
+          if (rowRemaining[r] > 0) rowsWithSpace.push(r);
+        }
+        if (rowsWithSpace.length === 0) break; // should not happen
 
-    for (let col of cols) {
-      let count = colCounts[col];
-      // Find rows that still need numbers (max 5 per row)
-      let available = [];
-      for (let r = 0; r < 3; r++) {
-        if (rowCounts[r] < 5) available.push(r);
-      }
-      // Shuffle available
-      for (let i = available.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [available[i], available[j]] = [available[j], available[i]];
-      }
-      let selected = available.slice(0, count).sort();
-      colRows[col] = selected;
-      selected.forEach((r) => rowCounts[r]++);
-    }
+        let r = rowsWithSpace[Math.floor(Math.random() * rowsWithSpace.length)];
 
-    // Step 3: Create empty ticket
-    let ticket = Array(3)
-      .fill()
-      .map(() => Array(9).fill(0));
+        // Find columns that still need numbers and are empty in this row
+        let validCols = [];
+        for (let c = 0; c < 9; c++) {
+          if (colRemaining[c] > 0 && ticket[r][c] === 0) validCols.push(c);
+        }
+        if (validCols.length === 0) {
+          // Dead end – restart
+          break;
+        }
 
-    // Mark positions
-    for (let c = 0; c < 9; c++) {
-      for (let r of colRows[c]) {
+        let c = validCols[Math.floor(Math.random() * validCols.length)];
         ticket[r][c] = 1;
+        rowRemaining[r]--;
+        colRemaining[c]--;
+        placed++;
       }
+
+      // Check if we successfully placed all 15 numbers
+      if (placed === 15) {
+        // Step 4: Fill numbers based on column ranges
+        const ranges = [
+          [1, 9],
+          [10, 19],
+          [20, 29],
+          [30, 39],
+          [40, 49],
+          [50, 59],
+          [60, 69],
+          [70, 79],
+          [80, 90],
+        ];
+
+        for (let c = 0; c < 9; c++) {
+          // Find rows that have a number in this column
+          let rows = [];
+          for (let r = 0; r < 3; r++) {
+            if (ticket[r][c] === 1) rows.push(r);
+          }
+          if (rows.length === 0) continue;
+
+          let [min, max] = ranges[c];
+          // Generate pool of possible numbers
+          let pool = [];
+          for (let n = min; n <= max; n++) pool.push(n);
+          // Shuffle pool
+          for (let i = pool.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [pool[i], pool[j]] = [pool[j], pool[i]];
+          }
+          // Take required amount and sort ascending
+          let numbers = pool.slice(0, rows.length).sort((a, b) => a - b);
+          // Assign to rows (rows are sorted ascending, numbers are sorted ascending)
+          for (let i = 0; i < rows.length; i++) {
+            ticket[rows[i]][c] = numbers[i];
+          }
+        }
+
+        return ticket;
+      }
+      // Otherwise, retry
     }
-
-    // Step 4: Fill numbers based on column ranges
-    const ranges = [
-      [1, 9],
-      [10, 19],
-      [20, 29],
-      [30, 39],
-      [40, 49],
-      [50, 59],
-      [60, 69],
-      [70, 79],
-      [80, 90],
-    ];
-
-    for (let c = 0; c < 9; c++) {
-      let rows = colRows[c];
-      if (rows.length === 0) continue;
-      let [min, max] = ranges[c];
-      // Generate pool of possible numbers
-      let pool = [];
-      for (let n = min; n <= max; n++) pool.push(n);
-      // Shuffle pool
-      for (let i = pool.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [pool[i], pool[j]] = [pool[j], pool[i]];
-      }
-      // Take required amount and sort ascending
-      let numbers = pool.slice(0, rows.length).sort((a, b) => a - b);
-      for (let i = 0; i < rows.length; i++) {
-        ticket[rows[i]][c] = numbers[i];
-      }
-    }
-
-    return ticket;
+    throw new Error("Failed to generate a valid ticket after many attempts");
   },
 
+  // Generate multiple tickets
   generateTickets(count) {
     let tickets = [];
     for (let i = 1; i <= count; i++) {
