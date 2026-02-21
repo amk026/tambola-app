@@ -82,7 +82,7 @@
             </div>
             <div class="stat-card">
               <div class="stat-icon">🏆</div>
-              <div class="stat-label">Winners</div>
+              <div class="stat-label">Prizes</div>
               <div class="stat-value orange" id="winnersCount">0/5</div>
             </div>
           </div>
@@ -282,7 +282,7 @@
           </div>
           <div class="stat-card">
             <div class="stat-icon">🏆</div>
-            <div class="stat-label">Winners</div>
+            <div class="stat-label">Prizes</div>
             <div class="stat-value" id="playerWinnersCount">0/5</div>
           </div>
         </div>
@@ -338,7 +338,7 @@
         <div id="playerNoResults" class="no-results">No tickets found</div>
       </div>
 
-      <!-- Modals -->
+      <!-- Modals (only those still needed) -->
       <div id="winnerModal" class="modal-overlay">
         <div class="modal-content">
           <span class="close">&times;</span>
@@ -372,42 +372,6 @@
             <button id="confirmCountdownBtn" class="btn btn-success">
               Start Game
             </button>
-          </div>
-        </div>
-      </div>
-
-      <div id="bookingModal" class="modal-overlay">
-        <div class="modal-content">
-          <span class="close">&times;</span>
-          <h3>Book Ticket <span id="selectedTicketId"></span></h3>
-          <input
-            type="text"
-            id="playerName"
-            class="search-input"
-            placeholder="Player name"
-          />
-          <div style="display: flex; gap: 10px; margin-top: 20px">
-            <button id="confirmBookingBtn" class="btn btn-success">
-              Confirm
-            </button>
-            <button id="cancelBookingBtn" class="btn btn-danger">Cancel</button>
-          </div>
-        </div>
-      </div>
-
-      <div id="editModal" class="modal-overlay">
-        <div class="modal-content">
-          <span class="close">&times;</span>
-          <h3>Edit Booking <span id="editTicketId"></span></h3>
-          <input
-            type="text"
-            id="editPlayerName"
-            class="search-input"
-            placeholder="New player name"
-          />
-          <div style="display: flex; gap: 10px; margin-top: 20px">
-            <button id="confirmEditBtn" class="btn btn-success">Save</button>
-            <button id="cancelEditBtn" class="btn btn-danger">Cancel</button>
           </div>
         </div>
       </div>

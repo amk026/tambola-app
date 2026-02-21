@@ -34,7 +34,8 @@ let gameState = {
   gameEndedAt: null,
   countdownEndTime: null,
   lastCallTime: null,
-  maxWinners: 1,
+  maxWinners: 5, // number of prize ranks (1st…5th)
+  currentPrizeRank: 1, // next prize rank to award
   gameEndReason: null,
 };
 
@@ -165,35 +166,51 @@ const TambolaGenerator = {
   },
 };
 
-// Winner detection
+// Winner detection – handles multiple simultaneous winners per rank
 function checkForFullHousieWinners() {
-  if (gameState.fullHousieWinners.length >= gameState.maxWinners) return;
+  // Stop if we already awarded all prizes
+  if (gameState.currentPrizeRank > gameState.maxWinners) return;
+
+  // Find all booked, not‑yet‑winner tickets that are now fully marked
   const activeTickets = gameState.tickets.filter(
     (t) => t.isBooked && !t.isFullHousieWinner,
   );
+  const newWinners = [];
+
   for (const ticket of activeTickets) {
     const ticketNumbers = ticket.numbers.flat().filter((n) => n !== 0);
     const allMarked = ticketNumbers.every((num) =>
       gameState.calledNumbers.includes(num),
     );
     if (allMarked) {
-      declareWinner(ticket);
-      if (gameState.fullHousieWinners.length >= gameState.maxWinners) break;
+      newWinners.push(ticket);
     }
   }
-  if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+
+  if (newWinners.length === 0) return;
+
+  // All these winners get the same prize rank (currentPrizeRank)
+  for (const ticket of newWinners) {
+    declareWinner(ticket, gameState.currentPrizeRank);
+  }
+
+  // Move to next prize rank
+  gameState.currentPrizeRank++;
+
+  // If we have now awarded the last prize, end the game
+  if (gameState.currentPrizeRank > gameState.maxWinners) {
     endGameDueToMaxWinners();
   }
 }
 
-function declareWinner(ticket) {
-  const order = gameState.fullHousieWinners.length + 1;
+function declareWinner(ticket, rank) {
   ticket.isFullHousieWinner = true;
-  ticket.fullHousieOrder = order;
+  ticket.fullHousieOrder = rank;
   ticket.winTime = new Date().toISOString();
   ticket.winningPattern = "FULL HOUSIE";
+
   const winner = {
-    order,
+    order: rank,
     ticketId: ticket.id,
     playerName: ticket.bookedBy,
     pattern: "FULL HOUSIE",
@@ -202,21 +219,23 @@ function declareWinner(ticket) {
     ticketNumbers: ticket.numbers,
     calledNumbersAtWin: [...gameState.calledNumbers],
   };
+
   gameState.fullHousieWinners.push(winner);
   gameState.winners.push({
     ticketId: ticket.id,
     playerName: ticket.bookedBy,
-    winnerOrder: order,
+    winnerOrder: rank,
     pattern: "FULL HOUSIE",
     declaredAt: new Date().toLocaleTimeString(),
   });
-  console.log(`🏆 WINNER #${order}: ${ticket.bookedBy} (${ticket.id})`);
+
+  console.log(`🏆 WINNER (rank ${rank}): ${ticket.bookedBy} (${ticket.id})`);
   io.emit("newFullHousieWinner", winner);
   broadcastState();
 }
 
 function endGameDueToMaxWinners() {
-  console.log("🏁 GAME ENDED – 5 winners reached");
+  console.log("🏁 GAME ENDED – All prize ranks awarded");
   gameState.status = "COMPLETED";
   gameState.gameEndedAt = Date.now();
   gameState.gameEndReason = "FULL_HOUSIE_COMPLETE";
@@ -260,29 +279,40 @@ function actuallyStartGame() {
 
 function scheduleNextCall() {
   if (gameState.status !== "RUNNING") return;
-  if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+
+  // Stop if all prize ranks have been awarded
+  if (gameState.currentPrizeRank > gameState.maxWinners) {
     endGameDueToMaxWinners();
     return;
   }
+
+  // If we've reached the end of the draw sequence, end the game
   if (gameState.drawIndex >= gameState.drawSequence.length) {
     endGame("SEQUENCE_COMPLETE");
     return;
   }
+
   const now = Date.now();
-  // 6 seconds between calls (changed from 3)
   const timeUntilNextCall = Math.max(0, 6000 - (now - gameState.lastCallTime));
+
   nextCallTimeout = setTimeout(() => {
     if (gameState.status !== "RUNNING") return;
-    if (gameState.fullHousieWinners.length >= gameState.maxWinners) {
+
+    // Re-check prize rank condition (in case winners were declared during the wait)
+    if (gameState.currentPrizeRank > gameState.maxWinners) {
       endGameDueToMaxWinners();
       return;
     }
+
     const number = gameState.drawSequence[gameState.drawIndex++];
     if (!gameState.calledNumbers.includes(number)) {
       gameState.calledNumbers.push(number);
     }
     gameState.lastCallTime = Date.now();
+
+    // Check for new winners after this number
     checkForFullHousieWinners();
+
     broadcastState();
     scheduleNextCall();
   }, timeUntilNextCall);
@@ -310,7 +340,8 @@ function resetGame() {
     gameEndedAt: null,
     countdownEndTime: null,
     lastCallTime: null,
-    maxWinners: 1,
+    maxWinners: 5,
+    currentPrizeRank: 1,
     gameEndReason: null,
   };
   clearTimeouts();
@@ -325,7 +356,6 @@ io.on("connection", (socket) => {
   // Host login
   socket.on("host:login", ({ username, password }) => {
     console.log("Login attempt:", username);
-    // Hardcoded credentials (you can change these)
     if (username === "admin" && password === "myNewSecret") {
       socket.isHost = true;
       console.log("Login successful for:", username);
@@ -359,6 +389,7 @@ io.on("connection", (socket) => {
     gameState.gameEndedAt = null;
     gameState.countdownEndTime = null;
     gameState.lastCallTime = null;
+    gameState.currentPrizeRank = 1;
     gameState.gameEndReason = null;
     broadcastState();
   });

@@ -13,7 +13,8 @@ let gameState = {
   gameEndedAt: null,
   countdownEndTime: null,
   lastCallTime: null,
-  maxWinners: 1,
+  maxWinners: 5,
+  currentPrizeRank: 1,
   gameEndReason: null,
 };
 let isHostAuthenticated = false;
@@ -21,6 +22,10 @@ let hostSearchTerm = "";
 let playerSearchTerm = "";
 let countdownInterval = null;
 let waRanges = [];
+
+// Inline form state
+let activeBookingTicketId = null;
+let activeEditTicketId = null;
 
 // Text-to-Speech
 let lastSpokenCountdownSecond = -1;
@@ -51,7 +56,6 @@ loadWARanges();
 // ---------- SOCKET HANDLERS ----------
 socket.on("connect", () => {
   console.log("Socket connected");
-  // Auto-login if credentials exist
   if (localStorage.getItem("hostAuth") === "true") {
     const username = localStorage.getItem("hostUser") || "admin";
     const password = localStorage.getItem("hostPass") || "myNewSecret";
@@ -127,13 +131,15 @@ function renderHost() {
   const total = gameState.tickets.length;
   const booked = gameState.tickets.filter((t) => t.isBooked).length;
   const available = total - booked;
-  const winnerCount = gameState.fullHousieWinners.length;
+  const prizeRanksAwarded = new Set(
+    gameState.fullHousieWinners.map((w) => w.order),
+  ).size;
 
   document.getElementById("totalTickets").textContent = total;
   document.getElementById("bookedTickets").textContent = booked;
   document.getElementById("availableTickets").textContent = available;
   document.getElementById("winnersCount").textContent =
-    `${winnerCount}/${gameState.maxWinners}`;
+    `${prizeRanksAwarded}/${gameState.maxWinners}`;
 
   // Show/hide search input
   const searchInput = document.getElementById("hostSearchInput");
@@ -182,7 +188,9 @@ function renderPlayer() {
   const booked = gameState.tickets.filter((t) => t.isBooked).length;
   const available = total - booked;
   const called = gameState.calledNumbers.length;
-  const winnerCount = gameState.fullHousieWinners.length;
+  const prizeRanksAwarded = new Set(
+    gameState.fullHousieWinners.map((w) => w.order),
+  ).size;
 
   const availElem = document.getElementById("playerAvailableTickets");
   const calledElem = document.getElementById("playerCalledCount");
@@ -193,13 +201,7 @@ function renderPlayer() {
   if (calledElem) calledElem.textContent = `${called}/90`;
   if (calledDisplayElem) calledDisplayElem.textContent = `${called}/90`;
   if (winnersElem)
-    winnersElem.textContent = `${winnerCount}/${gameState.maxWinners}`;
-
-  // Hide stats that are not needed (optional styling)
-  const calledStatCard = calledElem?.closest(".stat-card");
-  if (calledStatCard) calledStatCard.style.display = "none";
-  const winnersStatCard = winnersElem?.closest(".stat-card");
-  if (winnersStatCard) winnersStatCard.style.display = "none";
+    winnersElem.textContent = `${prizeRanksAwarded}/${gameState.maxWinners}`;
 
   // Called numbers grid visibility
   const calledWrapper = document.querySelector("#playerPanel .called-wrapper");
@@ -265,13 +267,15 @@ function renderWinners(view) {
   if (!list || !section || !progress) return;
 
   const winners = gameState.fullHousieWinners || [];
-  if (winners.length === 0) {
+  const prizeRanksAwarded = new Set(winners.map((w) => w.order)).size;
+
+  if (prizeRanksAwarded === 0) {
     section.style.display = "none";
     return;
   }
 
   section.style.display = "block";
-  progress.style.width = `${(winners.length / gameState.maxWinners) * 100}%`;
+  progress.style.width = `${(prizeRanksAwarded / gameState.maxWinners) * 100}%`;
 
   let html = "";
   winners
@@ -373,18 +377,43 @@ function renderTickets(view) {
         statusClass = "status-available";
       }
 
-      html += `<div class="${cardClass}">`;
+      html += `<div class="${cardClass}" id="ticket-${t.id}">`;
       html += `<div class="ticket-header">`;
       html += `<span class="ticket-id">${t.id}</span>`;
       html += `<span class="ticket-status ${statusClass}">${statusText}</span>`;
       html += `</div>`;
 
-      if (gameState.status === "BOOKING_OPEN" && !t.isFullHousieWinner) {
+      // Inline booking form?
+      if (activeBookingTicketId === t.id) {
+        html += `
+          <div class="inline-form">
+            <input type="text" id="inline-name-${t.id}" class="search-input" placeholder="Player name" autofocus>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button class="btn btn-success" onclick="confirmInlineBooking('${t.id}')">✅ Confirm</button>
+              <button class="btn btn-danger" onclick="cancelInlineBooking()">❌ Cancel</button>
+            </div>
+          </div>
+        `;
+      }
+      // Inline edit form?
+      else if (activeEditTicketId === t.id) {
+        html += `
+          <div class="inline-form">
+            <input type="text" id="inline-edit-${t.id}" class="search-input" value="${t.bookedBy || ""}" placeholder="New player name" autofocus>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button class="btn btn-success" onclick="confirmInlineEdit('${t.id}')">💾 Save</button>
+              <button class="btn btn-danger" onclick="cancelInlineEdit()">❌ Cancel</button>
+            </div>
+          </div>
+        `;
+      }
+      // Normal action buttons
+      else if (gameState.status === "BOOKING_OPEN" && !t.isFullHousieWinner) {
         if (!t.isBooked) {
-          html += `<button class="btn btn-secondary" onclick="openBookingForm('${t.id}')">📌 Book</button>`;
+          html += `<button class="btn btn-secondary" onclick="openInlineBooking('${t.id}')">📌 Book</button>`;
         } else {
           html += `<div style="display:flex; gap:8px; margin-top:12px;">`;
-          html += `<button class="btn btn-primary" onclick="openEditForm('${t.id}', '${t.bookedBy}')">✏️ Edit</button>`;
+          html += `<button class="btn btn-primary" onclick="openInlineEdit('${t.id}', '${t.bookedBy}')">✏️ Edit</button>`;
           html += `<button class="btn btn-danger" onclick="unbookTicket('${t.id}')">🗑️ Unbook</button>`;
           html += `</div>`;
         }
@@ -526,6 +555,70 @@ function testWARanges() {
   alert("Check console (F12) for test results");
 }
 
+// ---------- INLINE BOOKING HANDLERS ----------
+function openInlineBooking(ticketId) {
+  activeBookingTicketId = ticketId;
+  activeEditTicketId = null;
+  renderHost();
+  setTimeout(() => {
+    const input = document.getElementById(`inline-name-${ticketId}`);
+    if (input) input.focus();
+  }, 50);
+}
+
+function confirmInlineBooking(ticketId) {
+  const input = document.getElementById(`inline-name-${ticketId}`);
+  const name = input ? input.value.trim() : "";
+  if (!name) {
+    alert("Please enter a player name");
+    return;
+  }
+  socket.emit("host:bookTicket", { ticketId, playerName: name });
+  activeBookingTicketId = null;
+  renderHost();
+}
+
+function cancelInlineBooking() {
+  activeBookingTicketId = null;
+  renderHost();
+}
+
+function openInlineEdit(ticketId, currentName) {
+  activeEditTicketId = ticketId;
+  activeBookingTicketId = null;
+  renderHost();
+  setTimeout(() => {
+    const input = document.getElementById(`inline-edit-${ticketId}`);
+    if (input) {
+      input.value = currentName;
+      input.focus();
+    }
+  }, 50);
+}
+
+function confirmInlineEdit(ticketId) {
+  const input = document.getElementById(`inline-edit-${ticketId}`);
+  const name = input ? input.value.trim() : "";
+  if (!name) {
+    alert("Please enter a player name");
+    return;
+  }
+  socket.emit("host:editBooking", { ticketId, newPlayerName: name });
+  activeEditTicketId = null;
+  renderHost();
+}
+
+function cancelInlineEdit() {
+  activeEditTicketId = null;
+  renderHost();
+}
+
+function unbookTicket(ticketId) {
+  if (confirm("Release this ticket?")) {
+    socket.emit("host:unbookTicket", { ticketId });
+  }
+}
+
 // ---------- COUNTDOWN & TTS ----------
 function speak(text) {
   if (!window.speechSynthesis) return;
@@ -649,24 +742,6 @@ function showWinnerModal(ticketId) {
   document.getElementById("modalCalledList").innerHTML =
     `<strong>Called at win:</strong> ${winner.calledNumbersAtWin.join(", ")}`;
   modal.classList.add("show");
-}
-
-function openBookingForm(ticketId) {
-  document.getElementById("selectedTicketId").textContent = ticketId;
-  document.getElementById("playerName").value = "";
-  document.getElementById("bookingModal").classList.add("show");
-}
-
-function openEditForm(ticketId, currentName) {
-  document.getElementById("editTicketId").textContent = ticketId;
-  document.getElementById("editPlayerName").value = currentName;
-  document.getElementById("editModal").classList.add("show");
-}
-
-function unbookTicket(ticketId) {
-  if (confirm("Release this ticket?")) {
-    socket.emit("host:unbookTicket", { ticketId });
-  }
 }
 
 function showTicketGridModal() {
@@ -830,32 +905,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Booking confirm/cancel
-  document.getElementById("confirmBookingBtn").addEventListener("click", () => {
-    const name = document.getElementById("playerName").value.trim();
-    if (!name) return alert("Enter player name");
-    const ticketId = document.getElementById("selectedTicketId").textContent;
-    socket.emit("host:bookTicket", { ticketId, playerName: name });
-    document.getElementById("bookingModal").classList.remove("show");
-    document.getElementById("playerName").value = "";
-  });
-  document.getElementById("cancelBookingBtn").addEventListener("click", () => {
-    document.getElementById("bookingModal").classList.remove("show");
-    document.getElementById("playerName").value = "";
-  });
-
-  // Edit confirm/cancel
-  document.getElementById("confirmEditBtn").addEventListener("click", () => {
-    const name = document.getElementById("editPlayerName").value.trim();
-    if (!name) return alert("Enter player name");
-    const ticketId = document.getElementById("editTicketId").textContent;
-    socket.emit("host:editBooking", { ticketId, newPlayerName: name });
-    document.getElementById("editModal").classList.remove("show");
-  });
-  document.getElementById("cancelEditBtn").addEventListener("click", () => {
-    document.getElementById("editModal").classList.remove("show");
-  });
-
   // Search inputs
   document.getElementById("hostSearchInput").addEventListener("input", (e) => {
     hostSearchTerm = e.target.value;
@@ -888,8 +937,6 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   document.getElementById("printPdfBtn").addEventListener("click", () => {
     printPdfFromGrid();
-    // Optionally close modal
-    // document.getElementById("ticketGridModal").classList.remove("show");
   });
 
   // Tab navigation
@@ -962,7 +1009,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Initial route (optional: if URL contains /host, show host panel)
+  // Initial route
   if (window.location.pathname === "/host") {
     document.getElementById("hostPanel").style.display = "block";
     document.getElementById("playerPanel").style.display = "none";
