@@ -34,7 +34,7 @@ let gameState = {
   gameEndedAt: null,
   countdownEndTime: null,
   lastCallTime: null,
-  maxWinners: 10, // number of prize ranks (1st…5th)
+  maxWinners: 2, // number of prize ranks (1st…5th)
   currentPrizeRank: 1, // next prize rank to award
   gameEndReason: null,
 };
@@ -340,7 +340,7 @@ function resetGame() {
     gameEndedAt: null,
     countdownEndTime: null,
     lastCallTime: null,
-    maxWinners: 10,
+    maxWinners: 2,
     currentPrizeRank: 1,
     gameEndReason: null,
   };
