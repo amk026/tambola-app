@@ -130,7 +130,8 @@ function updateUI() {
 function renderHost() {
   const total = gameState.tickets.length;
   const booked = gameState.tickets.filter((t) => t.isBooked).length;
-  const available = total - booked;
+  const pending = gameState.tickets.filter((t) => t.isPending).length;
+  const available = total - booked - pending;
   const prizeRanksAwarded = new Set(
     gameState.fullHousieWinners.map((w) => w.order),
   ).size;
@@ -186,7 +187,8 @@ function renderHost() {
 function renderPlayer() {
   const total = gameState.tickets.length;
   const booked = gameState.tickets.filter((t) => t.isBooked).length;
-  const available = total - booked;
+  const pending = gameState.tickets.filter((t) => t.isPending).length;
+  const available = total - booked - pending;
   const called = gameState.calledNumbers.length;
   const prizeRanksAwarded = new Set(
     gameState.fullHousieWinners.map((w) => w.order),
@@ -327,12 +329,15 @@ function renderTickets(view) {
     filtered = gameState.tickets.filter(
       (t) =>
         t.id.toLowerCase().includes(term) ||
-        (t.bookedBy && t.bookedBy.toLowerCase().includes(term)),
+        (t.bookedBy && t.bookedBy.toLowerCase().includes(term)) ||
+        (t.pendingPlayerName &&
+          t.pendingPlayerName.toLowerCase().includes(term)),
     );
   } else {
     if (!isHost && gameState.status === "BOOKING_OPEN") {
+      // In player view with no search, show only available (not booked, not pending, not winner)
       filtered = gameState.tickets.filter(
-        (t) => !t.isBooked && !t.isFullHousieWinner,
+        (t) => !t.isBooked && !t.isFullHousieWinner && !t.isPending,
       );
     } else if (!isHost) {
       filtered = [];
@@ -371,6 +376,10 @@ function renderTickets(view) {
         cardClass += " booked";
         statusText = `📌 ${t.bookedBy}`;
         statusClass = "status-booked";
+      } else if (t.isPending) {
+        cardClass += " pending";
+        statusText = `⏳ ${t.pendingPlayerName}`;
+        statusClass = "status-pending";
       } else {
         cardClass += " available";
         statusText = "⚡ Available";
@@ -407,7 +416,19 @@ function renderTickets(view) {
           </div>
         `;
       }
-      // Normal action buttons
+      // Pending ticket actions
+      else if (t.isPending && !t.isFullHousieWinner) {
+        html += `
+          <div class="pending-info">
+            <div style="margin-bottom:8px;">⏳ Pending: ${t.pendingPlayerName}</div>
+            <div style="display:flex; gap:8px;">
+              <button class="btn btn-success" onclick="confirmPending('${t.id}')">✓ Confirm</button>
+              <button class="btn btn-danger" onclick="cancelPending('${t.id}')">✗ Cancel</button>
+            </div>
+          </div>
+        `;
+      }
+      // Normal action buttons for available or booked
       else if (gameState.status === "BOOKING_OPEN" && !t.isFullHousieWinner) {
         if (!t.isBooked) {
           html += `<button class="btn btn-secondary" onclick="openInlineBooking('${t.id}')">📌 Book</button>`;
@@ -434,6 +455,10 @@ function renderTickets(view) {
         cardClass += " booked";
         statusClass = "status-booked";
         statusText = `📌 ${t.bookedBy || "Booked"}`;
+      } else if (t.isPending) {
+        cardClass += " pending";
+        statusClass = "status-pending";
+        statusText = `⏳ Pending: ${t.pendingPlayerName}`;
       }
 
       html += `<div class="${cardClass}">`;
@@ -457,12 +482,14 @@ function renderTickets(view) {
 
       html += `</div>`;
 
+      // Show WhatsApp booking only if available and booking open
       if (
         gameState.status === "BOOKING_OPEN" &&
         !t.isBooked &&
+        !t.isPending &&
         !t.isFullHousieWinner
       ) {
-        html += `<button class="wa-book-btn" onclick="openWhatsAppBooking('${t.id}')">📲 Book via WhatsApp</button>`;
+        html += `<button class="wa-book-btn" onclick="requestBookingViaWhatsApp('${t.id}')">📲 Book via WhatsApp</button>`;
       }
 
       html += `</div>`;
@@ -507,11 +534,34 @@ function getWhatsAppNumberForTicket(ticketId) {
   return "917629048752";
 }
 
-function openWhatsAppBooking(ticketId) {
+// New function: player requests pending booking via WhatsApp
+function requestBookingViaWhatsApp(ticketId) {
+  const playerName = prompt("Enter your name to book this ticket:");
+  if (!playerName || playerName.trim() === "") return;
+
+  socket.emit("player:requestBooking", {
+    ticketId,
+    playerName: playerName.trim(),
+  });
+
   const number = getWhatsAppNumberForTicket(ticketId);
-  const message = encodeURIComponent(`Hi, I want to book ticket ${ticketId}`);
+  const message = encodeURIComponent(
+    `Hi, I want to book ticket ${ticketId} (${playerName})`,
+  );
   const url = `https://wa.me/${number}?text=${message}`;
   window.open(url, "_blank");
+}
+
+// Host confirm pending
+function confirmPending(ticketId) {
+  socket.emit("host:confirmPending", { ticketId });
+}
+
+// Host cancel pending
+function cancelPending(ticketId) {
+  if (confirm("Cancel this pending booking?")) {
+    socket.emit("host:cancelPending", { ticketId });
+  }
 }
 
 function addRange() {

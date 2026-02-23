@@ -156,6 +156,8 @@ const TambolaGenerator = {
         numbers: this.generateTicket(),
         isBooked: false,
         bookedBy: null,
+        isPending: false,
+        pendingPlayerName: null,
         isFullHousieWinner: false,
         fullHousieOrder: null,
         winTime: null,
@@ -422,6 +424,7 @@ io.on("connection", (socket) => {
     resetGame();
   });
 
+  // Host directly books a ticket (no pending)
   socket.on("host:bookTicket", ({ ticketId, playerName }) => {
     if (!requireHost()) return;
     if (gameState.status !== "BOOKING_OPEN") {
@@ -429,13 +432,19 @@ io.on("connection", (socket) => {
       return;
     }
     const ticket = gameState.tickets.find((t) => t.id === ticketId);
-    if (ticket && !ticket.isBooked && !ticket.isFullHousieWinner) {
+    if (
+      ticket &&
+      !ticket.isBooked &&
+      !ticket.isFullHousieWinner &&
+      !ticket.isPending
+    ) {
       ticket.isBooked = true;
       ticket.bookedBy = playerName;
       broadcastState();
     }
   });
 
+  // Host edits a booked ticket
   socket.on("host:editBooking", ({ ticketId, newPlayerName }) => {
     if (!requireHost()) return;
     if (gameState.status !== "BOOKING_OPEN") {
@@ -449,6 +458,7 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Host unbooks a ticket
   socket.on("host:unbookTicket", ({ ticketId }) => {
     if (!requireHost()) return;
     if (gameState.status !== "BOOKING_OPEN") {
@@ -461,6 +471,62 @@ io.on("connection", (socket) => {
       ticket.bookedBy = null;
       broadcastState();
     }
+  });
+
+  // Player requests a pending booking
+  socket.on("player:requestBooking", ({ ticketId, playerName }) => {
+    if (gameState.status !== "BOOKING_OPEN") {
+      socket.emit("host:error", { message: "Bookings are closed" });
+      return;
+    }
+    const ticket = gameState.tickets.find((t) => t.id === ticketId);
+    if (!ticket) {
+      socket.emit("host:error", { message: "Ticket not found" });
+      return;
+    }
+    if (ticket.isBooked || ticket.isFullHousieWinner) {
+      socket.emit("host:error", { message: "Ticket already booked or won" });
+      return;
+    }
+    if (ticket.isPending) {
+      socket.emit("host:error", { message: "Ticket already pending" });
+      return;
+    }
+    ticket.isPending = true;
+    ticket.pendingPlayerName = playerName;
+    broadcastState();
+  });
+
+  // Host confirms a pending booking
+  socket.on("host:confirmPending", ({ ticketId }) => {
+    if (!requireHost()) return;
+    const ticket = gameState.tickets.find((t) => t.id === ticketId);
+    if (!ticket || !ticket.isPending) {
+      socket.emit("host:error", {
+        message: "No pending booking for this ticket",
+      });
+      return;
+    }
+    ticket.isBooked = true;
+    ticket.bookedBy = ticket.pendingPlayerName;
+    ticket.isPending = false;
+    ticket.pendingPlayerName = null;
+    broadcastState();
+  });
+
+  // Host cancels a pending booking
+  socket.on("host:cancelPending", ({ ticketId }) => {
+    if (!requireHost()) return;
+    const ticket = gameState.tickets.find((t) => t.id === ticketId);
+    if (!ticket || !ticket.isPending) {
+      socket.emit("host:error", {
+        message: "No pending booking for this ticket",
+      });
+      return;
+    }
+    ticket.isPending = false;
+    ticket.pendingPlayerName = null;
+    broadcastState();
   });
 
   socket.on("disconnect", () => {
