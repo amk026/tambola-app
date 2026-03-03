@@ -13,7 +13,7 @@ let gameState = {
   gameEndedAt: null,
   countdownEndTime: null,
   lastCallTime: null,
-  maxWinners: 5,
+  maxWinners: 3,
   currentPrizeRank: 1,
   gameEndReason: null,
 };
